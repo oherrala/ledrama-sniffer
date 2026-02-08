@@ -1,10 +1,10 @@
 name: Snapshots
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_run:
+    workflows: [Rust]
+    types:
+      - completed
 
 jobs:
   snapshot-linux:
@@ -46,3 +46,4 @@ jobs:
         with:
           name: ledrama-sniffer-${{ matrix.target}}
           path: target/${{ matrix.target}}/release/ledrama-sniffer
+          if-no-files-found: error
