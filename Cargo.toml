@@ -1,0 +1,37 @@
+[package]
+name = "ledrama-sniffer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = [ "Ossi Herrala <oherrala@iki.fi>"]
+repository = "https://github.com/oherrala/ledrama-sniffer"
+publish = false
+rust-version = "1.93"
+
+[dependencies]
+anyhow = { version = "1", default-features = false }
+argh = { version = "0.1", default-features = false }
+jiff = { version = "0.2", default-features = false, features = [ "std" ] }
+luomu-common = { git = "https://github.com/sensorfu/luomu-libpcap", rev = "8bc424c42ddb8f31fbd05b756e4fd306bf147412", default-features = false }
+luomu-libpcap = { git = "https://github.com/sensorfu/luomu-libpcap", rev = "8bc424c42ddb8f31fbd05b756e4fd306bf147412", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = [ "ansi", "fmt" ] }
+untrusted = { version = "0.9", default-features = false }
+untrustended = { version = "0.4", default-features = false, features = [ "use_std" ] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true
+
+[workspace.metadata.cross.target.aarch64-unknown-linux-musl]
+pre-build = [
+    "apt-get update && apt-get --assume-yes install bison flex"
+]
+
+[workspace.metadata.cross.target.x86_64-unknown-linux-musl]
+pre-build = [
+    "apt-get update && apt-get --assume-yes install bison flex"
+]
