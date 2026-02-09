@@ -30,9 +30,8 @@ impl Readable for EthernetHeader {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[repr(u16)]
 pub enum EtherType {
-    Ipv4 = 0x0800,
+    Ipv4,
 }
 
 impl Readable for EtherType {
@@ -68,10 +67,9 @@ impl Readable for Ipv4Header {
 
     fn read(input: &mut untrusted::Reader<'_>) -> Result<Self::Output, untrustended::Error> {
         let word = input.read_u16be()?;
-        if (word >> 12) != 4 {
-            return Err(untrustended::Error::ParseError);
-        }
-        if (word >> 8) & 0b1111 != 5 {
+
+        // validate version and header len
+        if (word >> 12) != 4 || (word >> 8) & 0b1111 != 5 {
             return Err(untrustended::Error::ParseError);
         }
 
@@ -94,9 +92,8 @@ impl Readable for Ipv4Header {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[repr(u8)]
 pub enum Protocol {
-    Udp = 17,
+    Udp,
 }
 
 impl Readable for Protocol {
@@ -149,6 +146,11 @@ pub struct Dhcp {
     pub op: DhcpOp,
     pub xid: u32,
     pub chaddr: MacAddr,
+    // Client IP address; only filled in if client is in BOUND, RENEW or
+    // REBINDING state and can respond to ARP requests.
+    pub ciaddr: Option<Ipv4Addr>,
+    // 'your' (client) IP address.
+    pub yiaddr: Option<Ipv4Addr>,
     pub options: Box<[DhcpOption]>,
 }
 
@@ -158,62 +160,66 @@ impl Readable for Dhcp {
     fn read(input: &mut untrusted::Reader<'_>) -> Result<Self::Output, untrustended::Error> {
         let op = DhcpOp::read(input)?;
         let htype = input.read_u8()?;
-        if htype != 1 {
-            return Err(untrustended::Error::ParseError);
-        }
         let hlen = input.read_u8()?;
-        if hlen != 6 {
+        if htype != 1 || hlen != 6 {
             return Err(untrustended::Error::ParseError);
         }
         let _hops = input.read_u8()?;
         let xid = input.read_u32be()?;
         let _secs = input.read_u16be()?;
         let _flags = input.read_u16be()?;
-        let _caddr = input.read_ipv4addr()?;
-        let _yaddr = input.read_ipv4addr()?;
-        let _saddr = input.read_ipv4addr()?;
-        let _gaddr = input.read_ipv4addr()?;
+        let ciaddr = match input.read_ipv4addr()? {
+            Ipv4Addr::UNSPECIFIED => None,
+            addr => Some(addr),
+        };
+        let yiaddr = match input.read_ipv4addr()? {
+            Ipv4Addr::UNSPECIFIED => None,
+            addr => Some(addr),
+        };
+        let _siaddr = input.read_ipv4addr()?;
+        let _giaddr = input.read_ipv4addr()?;
         let chaddr = {
             let u48 = input.read_u48be()?;
+            input.skip(10)?;
             MacAddr::try_from(u48).map_err(|_| untrustended::Error::ParseError)?
         };
-        input.skip(10)?;
         let _sname = input.read_bytes(64)?;
         let _file = input.read_bytes(128)?;
 
         let magic = input.read_u32be()?;
-        if magic != 0x63825363 {
-            return Err(untrustended::Error::ParseError);
+        let mut options = Vec::new();
+        if magic == 0x63825363 {
+            loop {
+                let option = DhcpOption::read(input)?;
+                tracing::trace!("Parsed DHCP Option: {option:?}");
+                match option {
+                    DhcpOption::End => break,
+                    DhcpOption::Pad => continue,
+                    _ => options.push(option),
+                }
+            }
         }
 
-        let mut options = Vec::new();
-        loop {
-            let option = DhcpOption::read(input)?;
-            tracing::trace!("Parsed DHCP Option: {option:?}");
-            if option == DhcpOption::End {
-                break;
-            }
-            if option == DhcpOption::Pad {
-                continue;
-            }
-            options.push(option);
-        }
+        // skip padding
+        input.skip_to_end();
 
         Ok(Dhcp {
             op,
             xid,
             chaddr,
+            ciaddr,
+            yiaddr,
             options: options.into_boxed_slice(),
         })
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-#[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum DhcpOp {
-    BOOTREQUEST = 1,
-    BOOTREPLY = 2,
+    BOOTREQUEST,
+    BOOTREPLY,
+    Unknown(u8),
 }
 
 impl Readable for DhcpOp {
@@ -223,7 +229,7 @@ impl Readable for DhcpOp {
         match input.read_u8()? {
             1 => Ok(DhcpOp::BOOTREQUEST),
             2 => Ok(DhcpOp::BOOTREPLY),
-            _ => Err(untrustended::Error::ParseError),
+            n => Ok(DhcpOp::Unknown(n)),
         }
     }
 }
@@ -233,6 +239,7 @@ impl fmt::Display for DhcpOp {
         match self {
             DhcpOp::BOOTREPLY => f.write_str("BOOT Reply"),
             DhcpOp::BOOTREQUEST => f.write_str("BOOT Request"),
+            DhcpOp::Unknown(n) => write!(f, "BOOT Unknown({n})"),
         }
     }
 }
@@ -241,9 +248,12 @@ impl fmt::Display for DhcpOp {
 pub enum DhcpOption {
     Pad,
     End,
+    ClientIdentifier(u8, Box<[u8]>),
     Hostname(Box<str>),
     MessageType(DhcpMessageType),
     ParameterRequestList(Box<[u8]>),
+    RequestedIpAddress(Ipv4Addr),
+    VendorClassIdentifier(Box<str>),
     Unknown(u8, u8),
 }
 
@@ -260,8 +270,19 @@ impl Readable for DhcpOption {
             // Hostname
             12 => {
                 let len = input.read_u8()?;
-                let name = input.read_utf8(usize::from(len))?;
+                let buf = input.read_bytes(usize::from(len))?.as_slice_less_safe();
+                let name = String::from_utf8_lossy(buf);
                 Ok(DhcpOption::Hostname(name.into()))
+            }
+
+            // Requested IP address
+            50 => {
+                let len = input.read_u8()?;
+                if len != 4 {
+                    return Err(untrustended::Error::ParseError);
+                }
+                let ip = input.read_ipv4addr()?;
+                Ok(DhcpOption::RequestedIpAddress(ip))
             }
 
             // DHCP Message Type
@@ -277,9 +298,30 @@ impl Readable for DhcpOption {
                 Ok(DhcpOption::ParameterRequestList(params))
             }
 
+            // Vendor Class Identifier
+            60 => {
+                let len = input.read_u8()?;
+                let id = input.read_utf8(usize::from(len))?;
+                Ok(DhcpOption::VendorClassIdentifier(id.into()))
+            }
+
+            // DHCP Parameter Request list
+            61 => {
+                let len = input.read_u8()?;
+                let id_type = input.read_u8()?;
+                let id = input
+                    .read_bytes(usize::from(len.saturating_sub(1)))?
+                    .as_slice_less_safe()
+                    .into();
+                Ok(DhcpOption::ClientIdentifier(id_type, id))
+            }
+
             // Unknown option. We catch type and length
             typ => {
                 let len = input.read_u8()?;
+                let buf = input.read_bytes(usize::from(len))?.as_slice_less_safe();
+
+                tracing::trace!("Unknown Option t: {typ} l: {len} v: {buf:?}");
                 Ok(DhcpOption::Unknown(typ, len))
             }
         }
@@ -287,17 +329,16 @@ impl Readable for DhcpOption {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum DhcpMessageType {
-    DHCPDISCOVER = 1,
-    DHCPOFFER = 2,
-    DHCPREQUEST = 3,
-    DHCPDECLINE = 4,
-    DHCPACK = 5,
-    DHCPNAK = 6,
-    DHCPRELEASE = 7,
-    DHCPINFORM = 8,
+    DHCPDISCOVER,
+    DHCPOFFER,
+    DHCPREQUEST,
+    DHCPDECLINE,
+    DHCPACK,
+    DHCPNAK,
+    DHCPRELEASE,
+    DHCPINFORM,
     Unknown(u8),
 }
 
