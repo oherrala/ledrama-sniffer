@@ -399,9 +399,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "untrustended"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fab22a489f3db88460dd23f09b0d0566cb944a2085e1b552abcae15138d12e56"
+checksum = "efac0c90b95b8dddb836957e3a8368a5f8e32e24e6cfa25f79c10cab0c5c1769"
 dependencies = [
  "untrusted",
 ]
