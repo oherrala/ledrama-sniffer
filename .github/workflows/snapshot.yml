@@ -23,7 +23,7 @@ jobs:
         with:
           cache-key: cross-${{ matrix.target }}
       - run: cross build -v --release --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ledrama-sniffer-${{ matrix.target}}
           path: target/${{ matrix.target}}/release/ledrama-sniffer
@@ -42,7 +42,7 @@ jobs:
         with:
           cache-key: cargo-${{ matrix.target }}
       - run: cargo build -v --release --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ledrama-sniffer-${{ matrix.target}}
           path: target/${{ matrix.target}}/release/ledrama-sniffer
